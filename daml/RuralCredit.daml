@@ -1,0 +1,155 @@
+module RuralCredit where 
+
+import DigitalReal 
+
+template Credit
+  with 
+    bank: Party 
+    farmer: Party 
+    amount: Decimal 
+    platform: Party
+    suppliers: [Party]
+    products: [Text]
+  where 
+    signatory bank, platform
+    observer farmer
+    ensure amount >= 0.0
+
+    choice RequestToSpend: (ContractId Credit, ContractId SpendRequest)
+      with 
+        supplier: Party 
+        product: Text 
+        cost: Decimal 
+      controller farmer 
+      do 
+        assertMsg"Supplier Not Approved!" 
+          $ supplier `elem` suppliers 
+        assertMsg"Product Not Approved!" 
+          $ product `elem` products 
+
+        remaining <- create this with amount = amount - cost 
+        receipt <- create SpendRequest with .. 
+
+        return (remaining, receipt)
+
+template SpendRequest 
+  with 
+    bank: Party 
+    farmer: Party 
+    amount: Decimal 
+    platform: Party 
+    supplier: Party 
+    product: Text 
+    cost: Decimal 
+  where 
+    signatory bank, platform, farmer 
+    observer supplier 
+
+    choice AcceptCredit: ContractId Payable 
+      controller supplier 
+      do 
+        create Payable with .. 
+
+template Payable -- bank owes supplier BRL. 
+  with 
+    bank: Party 
+    farmer: Party 
+    platform: Party 
+    supplier: Party 
+    product: Text 
+    cost: Decimal 
+  where 
+    signatory bank, platform
+    observer supplier
+
+    choice Disburse: (ContractId FundedCredit, ContractId Holding)
+      with 
+        fundedCreditId: ContractId FundedCredit
+      controller platform 
+      do 
+        exercise fundedCreditId Redeem 
+          with 
+            amount = cost
+            ..
+
+template BankInProgram
+  with 
+    bank: Party 
+    platform: Party 
+    products: [Text]
+    suppliers: [Party]
+  where 
+    signatory platform 
+    observer bank
+
+    nonconsuming choice RequestCreditIssue: (ContractId IssueRequest, ContractId Holding)
+      with 
+        creditAmount: Decimal 
+        holdingId: ContractId Holding 
+      controller bank 
+      do 
+        (remainingHolding, lockRequestId) <- exercise holdingId RequestLock 
+          with 
+            locker = platform 
+            lockAmount = creditAmount 
+          
+        issueRequest <- create IssueRequest with ..
+
+        return (issueRequest, remainingHolding)
+
+template IssueRequest 
+  with 
+    bank: Party 
+    platform: Party 
+    products: [Text]
+    suppliers: [Party]
+    creditAmount: Decimal 
+    lockRequestId: ContractId LockRequest 
+  where 
+    signatory bank
+    observer platform
+
+    choice IssueCredit: ContractId FundedCredit 
+      controller platform 
+      do 
+        lockedHoldingId <- exercise lockRequestId Lock 
+        create FundedCredit with .. 
+
+template FundedCredit   
+  with
+    bank: Party 
+    platform: Party 
+    products: [Text]
+    suppliers: [Party]
+    creditAmount: Decimal
+    lockedHoldingId: ContractId LockedHolding 
+  where 
+    signatory platform, bank 
+    ensure creditAmount >= 0.0
+
+    choice ExtendCredit: (ContractId FundedCredit, ContractId Credit)
+      with 
+        farmer: Party 
+        amount: Decimal
+      controller platform 
+      do 
+        remaining <- create this with creditAmount = creditAmount - amount 
+        credit <- create Credit with ..
+        return (remaining, credit)
+
+    choice Redeem: (ContractId FundedCredit, ContractId Holding) 
+      with 
+        supplier: Party 
+        amount: Decimal
+      controller platform, bank
+      do
+        (remainingLocked, unlockedId) <- exercise lockedHoldingId Unlock 
+          with unlockAmount = amount 
+        (_, supplierHolding) <- exercise unlockedId Give 
+          with 
+            to = supplier
+            toAmount = amount
+        remainingCreditId <- create this with lockedHoldingId = remainingLocked 
+        return (remainingCreditId, supplierHolding)
+
+    

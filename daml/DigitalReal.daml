@@ -1,0 +1,101 @@
+module DigitalReal where 
+
+import DA.Assert ((===))
+
+template Holding   
+  with 
+    centralBank: Party 
+    owner: Party
+    amount: Decimal
+  where 
+    signatory centralBank 
+    ensure amount >= 0.0 
+    observer owner
+
+    choice Give: (ContractId Holding, ContractId Holding)
+      with 
+        to: Party 
+        toAmount: Decimal 
+      controller owner 
+      do 
+        ownerHolding <- create this with amount = amount - toAmount 
+        toHolding <- create this 
+          with 
+            amount = toAmount 
+            owner = to
+        return (toHolding, ownerHolding)
+
+    choice RequestLock: (ContractId Holding, ContractId LockRequest)
+      with 
+        locker: Party 
+        lockAmount: Decimal 
+      controller owner 
+      do 
+        ownerHolding <- create this with amount = amount - lockAmount 
+        lockRequest <- create LockRequest 
+          with 
+            amount = lockAmount 
+            locker
+            ..
+        return (ownerHolding, lockRequest)
+
+    choice Combine: ContractId Holding
+      with 
+        that: ContractId Holding 
+      controller owner 
+      do  
+        thatData <- fetch that 
+        thatData.owner === owner 
+        thatData.centralBank === centralBank 
+        archive that
+        create this with amount = amount + thatData.amount
+
+template LockRequest 
+  with 
+    centralBank: Party
+    owner: Party 
+    amount: Decimal 
+    locker: Party 
+  where 
+    signatory centralBank, owner 
+    observer locker 
+    ensure amount >= 0.0
+
+    choice Lock: ContractId LockedHolding 
+      controller locker 
+      do 
+        create LockedHolding with ..
+
+    choice ClawBack: ContractId Holding 
+      controller owner 
+      do 
+        create Holding with ..  
+
+    choice Decline: ContractId Holding 
+      controller locker 
+      do 
+        create Holding with .. 
+
+template LockedHolding 
+  with 
+    centralBank: Party 
+    owner: Party 
+    amount: Decimal 
+    locker: Party 
+  where 
+    signatory centralBank, owner, centralBank 
+    observer locker
+    ensure amount >= 0.0 
+
+    choice Unlock: (ContractId LockedHolding, ContractId Holding)
+      with 
+        unlockAmount: Decimal
+      controller locker 
+      do 
+        remaining <- create this with amount = amount - unlockAmount
+        holding <- create Holding 
+          with 
+            amount = unlockAmount
+            ..
+        return (remaining, holding)
+        

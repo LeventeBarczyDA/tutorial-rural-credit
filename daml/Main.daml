@@ -1,0 +1,63 @@
+module Main where
+
+import Daml.Script
+
+import DigitalReal 
+import RuralCredit
+
+setup : Script ()
+setup = script do
+-- user_setup_begin
+  farmer <- allocatePartyWithHint "Farmer" (PartyIdHint "Farmer")
+  bankA <- allocatePartyWithHint "BankA" (PartyIdHint "BankA")
+  bankB <- allocatePartyWithHint "BankB" (PartyIdHint "BankB")
+  cb <- allocatePartyWithHint "CentralBank" (PartyIdHint "CentralBank")
+  supplier <- allocatePartyWithHint "Supplier" (PartyIdHint "Supplier")
+  platform <- allocatePartyWithHint "DuAgroPlatform" (PartyIdHint "DuAgroPlatform")
+-- user_setup_end
+
+  bankAReais <- submit cb do 
+    createCmd Holding 
+      with 
+        centralBank = cb 
+        owner = bankA 
+        amount = 250_000_000.00
+
+  bankInProgram <- submit platform do 
+    createCmd BankInProgram 
+      with 
+        bank = bankA 
+        platform 
+        products = ["Diesel", "Seeds"]
+        suppliers = [supplier]
+
+  (issuanceRequest, bankAReais) <- submit bankA do 
+    exerciseCmd bankInProgram RequestCreditIssue 
+      with 
+        creditAmount = 60_000_000.00
+        holdingId = bankAReais 
+
+  fundedCredit <- submit platform do 
+    exerciseCmd issuanceRequest IssueCredit 
+
+  (fundedCredit, farmerCredit) <- submit platform do 
+    exerciseCmd fundedCredit ExtendCredit 
+      with 
+        farmer 
+        amount = 40_000_000.00
+
+  (farmerCredit, spendRequest) <- submit farmer do 
+    exerciseCmd farmerCredit RequestToSpend 
+      with 
+        supplier 
+        product = "Seeds"
+        cost = 12_000_000.00
+
+  payable <- submit supplier do 
+    exerciseCmd spendRequest AcceptCredit 
+
+  (fundedCredit, suppierReais) <- submit platform do 
+    exerciseCmd payable Disburse 
+      with fundedCreditId = fundedCredit
+
+  return ()
